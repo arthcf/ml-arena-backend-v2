@@ -16,55 +16,124 @@ services:
       interval: 2s
       timeout: 3s
       retries: 15
-
-  # Roda as migrations uma vez e termina. API e worker só sobem se ele terminar com sucesso.
-  migrate:
-    build: .
-    env_file:
-      - .env
-    volumes:
-      - .:/workspace
-    depends_on:
-      db:
-        condition: service_healthy
-    command: alembic upgrade head
-    restart: "no"
-
-  api:
-    build: .
-    container_name: ${API_CONTAINER_NAME:-ml-arena-api}
-    ports:
-      - "8000:8000"
-    env_file:
-      - .env
-    volumes:
-      - .:/workspace
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      redis:
-        condition: service_started
-    command: fastapi dev app/main.py --host 0.0.0.0 --port 8000
-
-  worker:
-    build: .
-    container_name: ${WORKER_CONTAINER_NAME:-ml-arena-worker}
-    env_file:
-      - .env
-    volumes:
-      - .:/workspace
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      redis:
-        condition: service_started
-    command: python -m worker.consumer
+    networks: [backend-net]
 
   redis:
-    image: redis:alpine
+    image: redis:7-alpine
     container_name: ${REDIS_CONTAINER_NAME:-ml-arena-redis}
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "pint"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    networks: [backend-net]
+
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    container_name: ${RABBITMQ_CONTAINER_NAME:-ml-arena-rabbitmq}
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-admin}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-admin}
+    ports:
+      - "15672:15672" # painel web
+      - "127.0.0.1:5672:5672" # AMQP (Advanced Message Queuing Protocol), minha máquina
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [backend-net]
+
+  minio:
+    image: pgsty/silo:RELEASE.2026-10-26T00-00-00Z
+    container_name: ${MINIO_CONTAINER_NAME:-ml-arena-minio}
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:admin}
+    ports:
+      - "9000:9000"  # API S3
+      - "9001:9001"  # console web
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [backend-net]
+
+  minio-init:
+    image: pgsty/silo:RELEASE.2026-10-26T00-00-00Z
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        mcli alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" &&
+        mcli mb --ignore-existing "local/$$MINIO_BUCKET"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:admin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-ml-arena}
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
+    networks: [backend-net]
+
+
+
+
 
 volumes:
   postgres_data:
+  rabbitmq_data:
+
+networks:
+  backend-net: {}
+
+  # # Roda as migrations uma vez e termina. API e worker só sobem se ele terminar com sucesso.
+  # migrate:
+  #   build: .
+  #   env_file:
+  #     - .env
+  #   volumes:
+  #     - .:/workspace
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  #   command: alembic upgrade head
+  #   restart: "no"
+
+  # api:
+  #   build: .
+  #   container_name: ${API_CONTAINER_NAME:-ml-arena-api}
+  #   ports:
+  #     - "8000:8000"
+  #   env_file:
+  #     - .env
+  #   volumes:
+  #     - .:/workspace
+  #   depends_on:
+  #     migrate:
+  #       condition: service_completed_successfully
+  #     redis:
+  #       condition: service_started
+  #   command: fastapi dev app/main.py --host 0.0.0.0 --port 8000
+
+  # worker:
+  #   build: .
+  #   container_name: ${WORKER_CONTAINER_NAME:-ml-arena-worker}
+  #   env_file:
+  #     - .env
+  #   volumes:
+  #     - .:/workspace
+  #   depends_on:
+  #     migrate:
+  #       condition: service_completed_successfully
+  #     redis:
+  #       condition: service_started
+  #   command: python -m worker.consumer
