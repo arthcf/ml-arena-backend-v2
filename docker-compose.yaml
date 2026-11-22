@@ -1,13 +1,16 @@
+# Infraestrutura do ML Arena no Trabalho 2 (Etapa 2): banco, cache, fila e armazenamento.
+# Senhas e usuários vêm do .env, sem valor padrão: se faltar algum, o `up` para com a mensagem
+# do `:?` em vez de subir com senha fraca. Portas de banco, Redis e AMQP não são publicadas
+# aqui (só a rede interna as usa); para acessá-las do host em desenvolvimento, veja
+# compose.dev.yaml.
 services:
   db:
     image: postgres:15-alpine
     container_name: ${DB_CONTAINER_NAME:-ml-arena-db}
     environment:
-      POSTGRES_USER: ${DB_USER:-admin}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-123456}
-      POSTGRES_DB: ${DB_NAME:-meu_banco}
-    ports:
-      - "${DB_EXTERNAL_PORT:-5432}:5432"
+      POSTGRES_USER: ${DB_USER:?defina DB_USER no .env}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?defina DB_PASSWORD no .env}
+      POSTGRES_DB: ${DB_NAME:?defina DB_NAME no .env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     # "Pronto" = aceita conexões, não só "container de pé". O migrate espera por isso.
@@ -21,24 +24,22 @@ services:
   redis:
     image: redis:7-alpine
     container_name: ${REDIS_CONTAINER_NAME:-ml-arena-redis}
-    ports:
-      - "6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "pint"]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 3s
       timeout: 3s
       retries: 10
     networks: [backend-net]
 
   rabbitmq:
-    image: rabbitmq:4-management-alpine
+    # Tag com versão menor fixa: a contagem de reentregas mudou dentro da série 4.x.
+    image: rabbitmq:4.2-management-alpine
     container_name: ${RABBITMQ_CONTAINER_NAME:-ml-arena-rabbitmq}
     environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-admin}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-admin}
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?defina RABBITMQ_USER no .env}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?defina RABBITMQ_PASSWORD no .env}
     ports:
       - "15672:15672" # painel web
-      - "127.0.0.1:5672:5672" # AMQP (Advanced Message Queuing Protocol), minha máquina
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
@@ -49,24 +50,27 @@ services:
     networks: [backend-net]
 
   minio:
+    # Silo: fork comunitário do MinIO (o oficial parou de publicar imagens). Mesma API S3,
+    # mesmas variáveis MINIO_ROOT_* e portas; o entrypoint traduz `server` para `silo server`.
     image: pgsty/silo:RELEASE.2026-10-26T00-00-00Z
     container_name: ${MINIO_CONTAINER_NAME:-ml-arena-minio}
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:admin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:admin}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?defina MINIO_ROOT_USER no .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?defina MINIO_ROOT_PASSWORD no .env (mín. 8 caracteres)}
     ports:
-      - "9000:9000"  # API S3
-      - "9001:9001"  # console web
+      - "9000:9000" # API S3: o navegador abre os links pré-assinados por aqui
+      - "9001:9001" # console web
     volumes:
       - minio_data:/data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
       interval: 5s
       timeout: 3s
       retries: 20
     networks: [backend-net]
 
+  # Cria o bucket e termina (exited 0). A API e o worker vão esperar por ele na Etapa 7.
   minio-init:
     image: pgsty/silo:RELEASE.2026-10-26T00-00-00Z
     entrypoint: ["/bin/sh", "-c"]
@@ -75,8 +79,8 @@ services:
         mcli alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" &&
         mcli mb --ignore-existing "local/$$MINIO_BUCKET"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:admin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:admin}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?defina MINIO_ROOT_USER no .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?defina MINIO_ROOT_PASSWORD no .env}
       MINIO_BUCKET: ${MINIO_BUCKET:-ml-arena}
     depends_on:
       minio:
@@ -84,56 +88,43 @@ services:
     restart: "no"
     networks: [backend-net]
 
-
-
-
+  # Etapa 7: migrate, api, worker e frontend voltam, sem bind mount e com depends_on por condição.
+  #
+  # migrate:
+  #   build: .
+  #   env_file: [.env]
+  #   depends_on:
+  #     db: { condition: service_healthy }
+  #   command: alembic upgrade head
+  #   restart: "no"
+  #   networks: [backend-net]
+  #
+  # api:
+  #   build: .
+  #   container_name: ${API_CONTAINER_NAME:-ml-arena-api}
+  #   ports: ["8000:8000"]
+  #   env_file: [.env]
+  #   depends_on:
+  #     migrate: { condition: service_completed_successfully }
+  #     redis: { condition: service_healthy }
+  #   command: fastapi run app/main.py --host 0.0.0.0 --port 8000
+  #   networks: [frontend-net, backend-net]
+  #
+  # worker:
+  #   build: .
+  #   container_name: ${WORKER_CONTAINER_NAME:-ml-arena-worker}
+  #   env_file: [.env]
+  #   depends_on:
+  #     migrate: { condition: service_completed_successfully }
+  #     redis: { condition: service_healthy }
+  #   command: python -m worker.consumer
+  #   networks: [backend-net]
 
 volumes:
   postgres_data:
   rabbitmq_data:
+  minio_data:
 
 networks:
+  # Não pode ser `internal: true`: a API e o worker precisam de internet para o DynamoDB.
   backend-net: {}
-
-  # # Roda as migrations uma vez e termina. API e worker só sobem se ele terminar com sucesso.
-  # migrate:
-  #   build: .
-  #   env_file:
-  #     - .env
-  #   volumes:
-  #     - .:/workspace
-  #   depends_on:
-  #     db:
-  #       condition: service_healthy
-  #   command: alembic upgrade head
-  #   restart: "no"
-
-  # api:
-  #   build: .
-  #   container_name: ${API_CONTAINER_NAME:-ml-arena-api}
-  #   ports:
-  #     - "8000:8000"
-  #   env_file:
-  #     - .env
-  #   volumes:
-  #     - .:/workspace
-  #   depends_on:
-  #     migrate:
-  #       condition: service_completed_successfully
-  #     redis:
-  #       condition: service_started
-  #   command: fastapi dev app/main.py --host 0.0.0.0 --port 8000
-
-  # worker:
-  #   build: .
-  #   container_name: ${WORKER_CONTAINER_NAME:-ml-arena-worker}
-  #   env_file:
-  #     - .env
-  #   volumes:
-  #     - .:/workspace
-  #   depends_on:
-  #     migrate:
-  #       condition: service_completed_successfully
-  #     redis:
-  #       condition: service_started
-  #   command: python -m worker.consumer

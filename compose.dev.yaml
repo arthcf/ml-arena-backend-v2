@@ -1,0 +1,16 @@
+# Só para desenvolvimento: publica banco, Redis e AMQP na máquina, presos a 127.0.0.1, para
+# rodar Alembic, notebooks e smoke tests do host. Não faz parte da entrega (o isolamento da
+# rede vale no docker-compose.yaml).
+#
+# Para ativar sem digitar -f, ponha no .env local:
+#   COMPOSE_FILE=docker-compose.yaml:compose.dev.yaml
+services:
+  db:
+    ports:
+      - "127.0.0.1:${DB_EXTERNAL_PORT:-5432}:5432"
+  redis:
+    ports:
+      - "127.0.0.1:6379:6379"
+  rabbitmq:
+    ports:
+      - "127.0.0.1:5672:5672" # AMQP
