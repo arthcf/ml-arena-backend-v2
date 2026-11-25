@@ -1,7 +1,7 @@
-"""Testa as decisões do worker sobre cada mensagem (apagar, devolver à fila, marcar failed).
+"""Testa as decisões do worker sobre cada mensagem (ack, nack para tentar de novo, reject para a DLQ).
 
-Sem banco nem AWS: `process_run` e `_mark_failed` são trocados por funções falsas, e o cliente
-SQS só anota as mensagens apagadas.
+Sem banco nem RabbitMQ: `process_run` e `_mark_failed` são trocados por funções falsas, e a
+mensagem falsa só anota a resposta que recebeu.
 """
 
 import asyncio
@@ -12,20 +12,31 @@ import pytest
 from worker import consumer
 
 
-class FakeSQS:
-    def __init__(self):
-        self.deleted = []
+class FakeMessage:
+    """Imita a mensagem do aio-pika: corpo, cabeçalhos e as três respostas possíveis."""
 
-    async def delete_message(self, QueueUrl, ReceiptHandle):  # noqa: N803 (nome do boto3)
-        self.deleted.append(ReceiptHandle)
+    def __init__(self, body, delivery_count=None):
+        self.body = body.encode() if isinstance(body, str) else body
+        # Como o RabbitMQ: na 1ª entrega o cabeçalho x-delivery-count não vem.
+        self.headers = (
+            {} if delivery_count is None else {"x-delivery-count": delivery_count}
+        )
+        self.responses = []
+
+    async def ack(self):
+        self.responses.append("ack")
+
+    async def nack(self, requeue=True):
+        self.responses.append(f"nack(requeue={requeue})")
+
+    async def reject(self, requeue=False):
+        self.responses.append(f"reject(requeue={requeue})")
 
 
-def _message(body, attempts=1):
-    return {
-        "Body": body,
-        "ReceiptHandle": "rh-1",
-        "Attributes": {"ApproximateReceiveCount": str(attempts)},
-    }
+def _run_message(run_id=1, attempt=1):
+    """Mensagem válida na tentativa `attempt` (1 = primeira entrega)."""
+    count = None if attempt == 1 else attempt - 1
+    return FakeMessage(json.dumps({"run_id": run_id}), delivery_count=count)
 
 
 @pytest.fixture
@@ -42,6 +53,7 @@ def calls(monkeypatch):
 
     monkeypatch.setattr(consumer, "process_run", fake_process_run)
     monkeypatch.setattr(consumer, "_mark_failed", fake_mark_failed)
+    monkeypatch.setattr(consumer, "RETRY_DELAY_S", 0)  # sem espera real nos testes
     return state
 
 
@@ -49,43 +61,47 @@ def calls(monkeypatch):
     "body",
     [
         "não é json",
-        json.dumps({"Type": "Notification", "Message": "{}"}),  # envelope do SNS
+        json.dumps({"Type": "Notification", "Message": "{}"}),  # sem run_id
         json.dumps({"run_id": "abc"}),
     ],
 )
-def test_mensagem_invalida_e_descartada_sem_derrubar(calls, body):
-    sqs = FakeSQS()
-    asyncio.run(consumer.handle_message(_message(body), sqs))
-    assert sqs.deleted == ["rh-1"]
+def test_mensagem_invalida_vai_para_a_dlq(calls, body):
+    message = FakeMessage(body)
+    asyncio.run(consumer.handle_message(message))
+    assert message.responses == ["reject(requeue=False)"]
     assert calls["failed"] == []
 
 
-def test_sucesso_apaga_a_mensagem(calls):
-    sqs = FakeSQS()
-    asyncio.run(consumer.handle_message(_message(json.dumps({"run_id": 1})), sqs))
-    assert sqs.deleted == ["rh-1"]
+def test_tentativa_vem_do_x_delivery_count():
+    assert consumer._attempt(FakeMessage("{}")) == 1  # 1ª entrega: sem cabeçalho
+    assert consumer._attempt(FakeMessage("{}", delivery_count=2)) == 3
+
+
+def test_sucesso_da_ack(calls):
+    message = _run_message()
+    asyncio.run(consumer.handle_message(message))
+    assert message.responses == ["ack"]
 
 
 def test_erro_de_dado_marca_failed_na_hora(calls):
     calls["error"] = ValueError("CSV ruim")
-    sqs = FakeSQS()
-    asyncio.run(consumer.handle_message(_message(json.dumps({"run_id": 1})), sqs))
+    message = _run_message()
+    asyncio.run(consumer.handle_message(message))
     assert calls["failed"] == [1]
-    assert sqs.deleted == ["rh-1"]
+    assert message.responses == ["ack"]
 
 
 def test_erro_inesperado_volta_para_a_fila(calls):
     calls["error"] = ConnectionError("Redis fora do ar")
-    sqs = FakeSQS()
-    asyncio.run(consumer.handle_message(_message(json.dumps({"run_id": 1})), sqs))
-    assert sqs.deleted == []
+    message = _run_message(attempt=1)
+    asyncio.run(consumer.handle_message(message))
+    assert message.responses == ["nack(requeue=True)"]
     assert calls["failed"] == []
 
 
 def test_erro_inesperado_na_ultima_tentativa_marca_failed(calls):
     calls["error"] = ConnectionError("Redis fora do ar")
-    sqs = FakeSQS()
-    message = _message(json.dumps({"run_id": 1}), attempts=consumer.MAX_ATTEMPTS)
-    asyncio.run(consumer.handle_message(message, sqs))
+    message = _run_message(attempt=consumer.MAX_ATTEMPTS)
+    asyncio.run(consumer.handle_message(message))
     assert calls["failed"] == [1]
-    assert sqs.deleted == ["rh-1"]
+    assert message.responses == ["ack"]

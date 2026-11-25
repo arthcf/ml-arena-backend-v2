@@ -19,6 +19,7 @@ dependencies = [
     "python-multipart>=0.0.32",
     "sqlalchemy[asyncio]>=2.0.54",
     "redis>=8.1.0",
+    "aio-pika>=10.2.3",
 ]
 
 [dependency-groups]

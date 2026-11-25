@@ -13,7 +13,7 @@ depende do `.env` de quem roda.
 import os
 
 # Um valor para cada campo obrigatório de `Settings` (app/core/config.py).
-# Quando o config.py ganhar campos novos (ex.: RabbitMQ na Etapa 4), eles entram aqui.
+# Quando o config.py ganhar um campo obrigatório novo, ele entra aqui.
 TEST_ENV: dict[str, str] = {
     # Banco: o engine do SQLAlchemy é criado no import, mas só conecta na 1ª query
     "DB_HOST": "localhost",
@@ -28,10 +28,12 @@ TEST_ENV: dict[str, str] = {
     "MINIO_ROOT_USER": "test",
     "MINIO_ROOT_PASSWORD": "test-password",
     "MINIO_BUCKET": "test-bucket",
+    # RabbitMQ: o worker e a API só conectam na 1ª publicação/consumo; os testes usam fakes
+    "RABBITMQ_HOST": "localhost",
+    "RABBITMQ_USER": "test",
+    "RABBITMQ_PASSWORD": "test",
     # AWS: só nomes; nenhum teste chama a AWS (o worker usa fakes). Conta 000000000000 = exemplo
     "AWS_REGION": "us-east-1",
-    "SNS_TOPIC_ARN": "arn:aws:sns:us-east-1:000000000000:test-topic",
-    "SQS_QUEUE_URL": "https://sqs.us-east-1.amazonaws.com/000000000000/test-queue",
     "DYNAMODB_AUDIT_TABLE": "test-audit",  # opcional hoje, obrigatório na Etapa 5
     # Porta 1: nada escuta nela; um teste que use o Redis de verdade falha na hora
     "REDIS_URL": "redis://localhost:1/0",

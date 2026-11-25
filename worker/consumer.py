@@ -1,10 +1,15 @@
-"""Worker: consome a fila SQS e gera os plots de cada CSV enviado.
+"""Worker: consome a fila do RabbitMQ e gera os plots de cada CSV enviado.
 
 Roda como processo separado (`python -m worker.consumer`), fora da API. Para cada mensagem:
-baixa o CSV do S3, gera os dois PNGs (`worker/processing.py`), sobe os PNGs, e atualiza
+baixa o CSV do MinIO, gera os dois PNGs (`worker/processing.py`), sobe os PNGs, e atualiza
 run e artifacts no banco. Erro de dado marca como failed na hora; qualquer outro erro
 volta pra fila até a 3ª tentativa, e nenhum erro derruba o processo. Os logs ETAPA 1/2/3
 mostram onde cada run está.
+
+Diferença para o SQS do T1: lá, "não apagar" já fazia a mensagem voltar depois do visibility
+timeout. Aqui o worker responde explicitamente: `ack` (tira da fila), `nack(requeue=True)`
+(devolve na hora) ou `reject(requeue=False)` (manda para a DLQ). Como o `nack` devolve na
+hora, a espera entre tentativas é feita pelo próprio worker.
 """
 
 import asyncio
@@ -12,15 +17,16 @@ import json
 import logging
 import time
 
-from botocore.config import Config
+import aio_pika
+from aio_pika.abc import AbstractIncomingMessage
 
-from app.core.aws import aws_session
 from app.core.cache import invalidate_user_cache
 from app.core.config import settings
 from app.db.models import Artifact, Run
 from app.db.session import session_scope
 from app.repositories import artifact_repository, run_repository
 from app.services import audit_service, storage
+from app.services.messaging import MAX_DELIVERIES, QUEUE, declare_topology
 from worker.processing import make_plots, read_pairs
 
 logger = logging.getLogger("worker")
@@ -31,11 +37,15 @@ PLOT_FILES = {
     "plot_measured_predicted": "plots/measured_predicted.png",
     "plot_residuals": "plots/residuals.png",
 }
-# Mesmo número do maxReceiveCount da fila. Na última tentativa o worker decide o fim,
-# então a mensagem nunca precisa cair na DLQ por falha transitória.
-MAX_ATTEMPTS = 3
+# Na última entrega que a fila permite, o worker decide o fim (marca failed e dá ack), então
+# a mensagem nunca precisa cair na DLQ por falha transitória.
+MAX_ATTEMPTS = MAX_DELIVERIES
+# Espera antes de devolver a mensagem: RETRY_DELAY_S × tentativa (5 s, depois 10 s). Sem ela
+# as 3 tentativas acabariam em milissegundos, antes de o MinIO ou o banco voltarem. Com
+# prefetch 1, bloquear este worker durante a espera é aceitável.
+RETRY_DELAY_S = 5
 # Erro de dado: o CSV não serve. Não adianta tentar de novo. Qualquer outro erro
-# (S3, SQS, banco, Redis ou inesperado) volta pra fila até MAX_ATTEMPTS.
+# (MinIO, banco, Redis ou inesperado) volta pra fila até MAX_ATTEMPTS.
 PERMANENT_ERRORS = (ValueError, KeyError)
 
 
@@ -71,14 +81,14 @@ async def _audit_worker(user_id: int, action: str, run_id: int, details: dict) -
 
 
 async def process_run(run_id: int) -> None:
-    """O trabalho de verdade: CSV do S3 → plots → S3 → banco."""
+    """O trabalho de verdade: CSV do MinIO → plots → MinIO → banco."""
     async with session_scope() as session:
         run = await session.get(Run, run_id)
         if run is None:
             logger.info("Run %s não existe mais; descartando a mensagem.", run_id)
             return
         if run.status == "done":
-            return  # mensagem repetida (o SQS entrega pelo menos uma vez): já foi feito
+            return  # mensagem repetida (a fila entrega pelo menos uma vez): já foi feito
 
         csv_artifact = await artifact_repository.get_artifact_by_type(
             session, run_id, CSV_TYPE
@@ -151,23 +161,26 @@ async def _mark_failed(run_id: int, message: str) -> None:
     await invalidate_user_cache(user_id=run.user_id)
 
 
-async def _delete_message(message: dict, sqs_client) -> None:
-    """Tira a mensagem da fila de vez (feita, falha final ou inválida)."""
-    await sqs_client.delete_message(
-        QueueUrl=settings.sqs_queue_url, ReceiptHandle=message["ReceiptHandle"]
-    )
+def _attempt(message: AbstractIncomingMessage) -> int:
+    """Número desta tentativa (1, 2, 3...).
+
+    Numa fila quorum, o RabbitMQ conta as devoluções em `x-delivery-count`; na 1ª entrega o
+    cabeçalho não vem. Por isso tentativa = devoluções anteriores + 1.
+    """
+    return int((message.headers or {}).get("x-delivery-count", 0)) + 1
 
 
-async def handle_message(message: dict, sqs_client) -> None:
-    """Trata uma mensagem: decide se apaga da fila (feito ou falha final) ou se deixa voltar (erro transitório)."""
+async def handle_message(message: AbstractIncomingMessage) -> None:
+    """Trata uma mensagem e responde ao broker: ack, nack (tentar de novo) ou reject (DLQ)."""
     try:
-        run_id = int(json.loads(message["Body"])["run_id"])
+        run_id = int(json.loads(message.body)["run_id"])
     except (ValueError, KeyError, TypeError):
         # Sem run_id não há run para marcar como failed, e tentar de novo não muda nada.
-        logger.error("Mensagem sem run_id válido, descartada: %r", message.get("Body"))
-        await _delete_message(message, sqs_client)
+        # Vai para a DLQ, onde dá para inspecionar o que chegou (no SQS ela era apagada).
+        logger.error("Mensagem sem run_id válido, enviada à DLQ: %r", message.body)
+        await message.reject(requeue=False)
         return
-    attempts = int(message["Attributes"]["ApproximateReceiveCount"])
+    attempts = _attempt(message)
     logger.info("ETAPA 1 recebida: run %s (tentativa %s).", run_id, attempts)
 
     try:
@@ -177,47 +190,59 @@ async def handle_message(message: dict, sqs_client) -> None:
         logger.warning("Run %s: CSV não pôde ser processado: %r", run_id, exc)
         await _mark_failed(run_id, "Processamento falhou: o CSV não pôde ser lido.")
     except Exception:
-        # Infraestrutura (S3, SQS, banco, Redis) ou erro inesperado: vale tentar de novo.
+        # Infraestrutura (MinIO, banco, Redis) ou erro inesperado: vale tentar de novo.
         if attempts < MAX_ATTEMPTS:
+            delay = RETRY_DELAY_S * attempts
             logger.exception(
-                "Run %s: erro na tentativa %s; tentando de novo.", run_id, attempts
+                "Run %s: erro na tentativa %s; volta à fila em %ss.",
+                run_id,
+                attempts,
+                delay,
             )
-            return  # não apaga: a mensagem volta pra fila depois do visibility timeout
+            # Espera antes de devolver: o nack põe a mensagem de volta na hora, então esperar
+            # depois dele não adiantaria (outro worker a pegaria imediatamente).
+            await asyncio.sleep(delay)
+            await message.nack(requeue=True)
+            return  # sem o return, cairia no ack abaixo e a mensagem se perderia
         logger.exception("Run %s: esgotou as %s tentativas.", run_id, MAX_ATTEMPTS)
         await _mark_failed(run_id, "Falha no processamento. Tente reenviar o CSV.")
 
-    await _delete_message(message, sqs_client)
+    await message.ack()
+
+
+async def _consume(connection: aio_pika.abc.AbstractRobustConnection) -> None:
+    """Consome a fila até a conexão cair. Uma mensagem por vez (prefetch 1)."""
+    channel = await connection.channel()
+    # Prefetch 1: o broker só entrega a próxima depois do ack/nack desta. Com várias réplicas
+    # do worker, quem está livre recebe (equivale ao MaxNumberOfMessages=1 do SQS).
+    await channel.set_qos(prefetch_count=1)
+    _, queue = await declare_topology(channel)
+    async with queue.iterator() as messages:
+        async for message in messages:
+            try:
+                await handle_message(message)
+            except Exception:
+                # Ex.: o banco caiu no meio do _mark_failed. Sem resposta, a mensagem ficaria
+                # presa a este worker (e, com prefetch 1, ele pararia). Devolve à fila depois
+                # de uma espera; o worker segue vivo para as próximas.
+                logger.exception("Erro ao tratar mensagem; ela voltará à fila.")
+                if not message.processed:
+                    await asyncio.sleep(RETRY_DELAY_S)
+                    await message.nack(requeue=True)
 
 
 async def run_forever() -> None:
-    """Loop principal: pede mensagem à fila, trata e repete. Se a fila falhar, espera 5s e tenta de novo."""
-    logger.info("Worker escutando a fila %s", settings.sqs_queue_url)
-
-    sqs_config = Config(
-        read_timeout=30, connect_timeout=10, retries={"max_attempts": 3}
-    )
-
+    """Loop principal: conecta, consome e, se a conexão falhar, espera 5 s e tenta de novo."""
+    logger.info("Worker escutando a fila %s", QUEUE)
     while True:
         try:
-            async with aws_session.client("sqs", config=sqs_config) as sqs:
-                while True:
-                    response = await sqs.receive_message(
-                        QueueUrl=settings.sqs_queue_url,
-                        MaxNumberOfMessages=1,
-                        WaitTimeSeconds=20,
-                        AttributeNames=["ApproximateReceiveCount"],
-                    )
-                    for message in response.get("Messages", []):
-                        try:
-                            await handle_message(message, sqs)
-                        except Exception:
-                            # Ex.: o banco caiu no meio do _mark_failed. A mensagem não foi
-                            # apagada e volta pra fila; o worker segue vivo para as próximas.
-                            logger.exception(
-                                "Erro ao tratar mensagem; ela voltará à fila."
-                            )
+            # connect_robust reconecta sozinha se o broker reiniciar; este laço cobre a 1ª
+            # conexão (ex.: o worker subiu antes do RabbitMQ).
+            connection = await aio_pika.connect_robust(settings.rabbitmq_url)
+            async with connection:
+                await _consume(connection)
         except Exception:
-            logger.exception("Falha ao consultar a fila; tentando de novo em 5s.")
+            logger.exception("Falha na conexão com o RabbitMQ; tentando de novo em 5s.")
             await asyncio.sleep(5)
 
 
