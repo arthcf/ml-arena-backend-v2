@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     rabbitmq_password: str
     # AWS: só o DynamoDB (tabela de auditoria) continua na AWS
     aws_region: str
-    dynamodb_audit_table: str | None = None
+    dynamodb_audit_table: str
     redis_url: str
     # Chaves opcionais: se ausentes, o boto3 usa a cadeia padrão (ambiente, IAM role)
     aws_access_key_id: str | None = None

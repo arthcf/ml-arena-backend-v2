@@ -34,7 +34,7 @@ TEST_ENV: dict[str, str] = {
     "RABBITMQ_PASSWORD": "test",
     # AWS: só nomes; nenhum teste chama a AWS (o worker usa fakes). Conta 000000000000 = exemplo
     "AWS_REGION": "us-east-1",
-    "DYNAMODB_AUDIT_TABLE": "test-audit",  # opcional hoje, obrigatório na Etapa 5
+    "DYNAMODB_AUDIT_TABLE": "test-audit",
     # Porta 1: nada escuta nela; um teste que use o Redis de verdade falha na hora
     "REDIS_URL": "redis://localhost:1/0",
 }
