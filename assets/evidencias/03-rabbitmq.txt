@@ -1,0 +1,9 @@
+$ docker compose exec rabbitmq rabbitmqctl list_queues name type messages_ready messages_unacknowledged
+name	type	messages_ready	messages_unacknowledged
+csv-processing	quorum	0	0
+csv-processing.dlq	quorum	0	0
+
+$ docker compose exec rabbitmq rabbitmqctl list_bindings source_name destination_name routing_key
+source_name	destination_name	routing_key
+ml-arena.events	csv-processing	csv.uploaded
+ml-arena.dlx	csv-processing.dlq	csv-processing.dlq

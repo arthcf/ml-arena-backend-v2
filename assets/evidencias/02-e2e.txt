@@ -1,0 +1,19 @@
+1. Cadastro e login
+  ok usuário e2e-1795645484@example.com
+2. Dois runs, upload e processamento pelo worker
+  ok runs 6 e 7: done
+3. Comparação: links pré-assinados do MinIO abrem no navegador
+  ok 4 PNGs em localhost:9000 com assinatura, todos 200
+4. Desacoplamento: com o worker parado a API aceita e a mensagem espera na fila
+  ok upload 201, run não processado, 1 mensagem Ready
+  ok worker religado processou o run 8
+5. Falhas esperadas
+  ok CSV inválido: 422
+  ok segundo CSV no mesmo run: 409
+  ok sem token: 401
+6. Auditoria (DynamoDB): 200 com credenciais do Learner Lab, 503 sem
+  ok GET /audit: 503
+7. Remover um run apaga os objetos do MinIO
+  ok run 6 removido; o link do plot agora dá 404
+
+Tudo certo.
