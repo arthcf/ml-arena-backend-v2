@@ -42,6 +42,10 @@ services:
     # Tag com versão menor fixa: a contagem de reentregas mudou dentro da série 4.x.
     image: rabbitmq:4.2-management-alpine
     container_name: ${RABBITMQ_CONTAINER_NAME:-ml-arena-rabbitmq}
+    # O RabbitMQ guarda os dados sob o nome do nó, que vem do hostname. Sem hostname fixo ele
+    # seria o ID do container, que muda a cada recriação: o broker subiria como outro nó e as
+    # mensagens que estavam na fila ficariam órfãs no volume.
+    hostname: rabbitmq
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?defina RABBITMQ_USER no .env}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?defina RABBITMQ_PASSWORD no .env}
