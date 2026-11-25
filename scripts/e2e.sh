@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Teste ponta a ponta do ML Arena com o compose no ar (`docker compose up -d --build`).
 # Roda da raiz do repositório: `bash scripts/e2e.sh`. Precisa de curl e python3 no host.
+# No Kubernetes (k8s/up.sh): `K8S=1 bash scripts/e2e.sh` (usa kubectl em vez do compose).
 #
 # Percorre o fluxo da aplicação pela API (o mesmo que o frontend usa): cadastro, login,
 # dois runs, upload dos CSVs, processamento pelo worker, comparação com os links do MinIO,
@@ -36,9 +37,22 @@ upload() { # sobe o CSV $2 no run $1 e devolve o código HTTP
   status_of -X POST "$API/runs/$1/measured-predicted" -H "$AUTH" -F "file=@$2"
 }
 
+# Parar/religar o worker e olhar a fila: pelo compose ou pelo kubectl (K8S=1).
+if [ "${K8S:-}" = 1 ]; then
+  stop_worker() {
+    kubectl -n ml-arena scale deployment/worker --replicas=0 >/dev/null
+    kubectl -n ml-arena wait --for=delete pod -l app=worker --timeout=90s >/dev/null 2>&1 || true
+  }
+  start_worker() { kubectl -n ml-arena scale deployment/worker --replicas=2 >/dev/null; }
+  rabbitmqctl() { kubectl -n ml-arena exec deploy/rabbitmq -- rabbitmqctl "$@"; }
+else
+  stop_worker() { docker compose stop worker >/dev/null 2>&1; }
+  start_worker() { docker compose start worker >/dev/null 2>&1; }
+  rabbitmqctl() { docker compose exec -T rabbitmq rabbitmqctl "$@"; }
+fi
+
 queue_ready() {
-  docker compose exec -T rabbitmq rabbitmqctl list_queues -q name messages_ready |
-    awk '$1 == "csv-processing" {print $2}'
+  rabbitmqctl list_queues -q name messages_ready | awk '$1 == "csv-processing" {print $2}'
 }
 
 echo "1. Cadastro e login"
@@ -68,14 +82,14 @@ done
 ok "4 PNGs em localhost:9000 com assinatura, todos 200"
 
 echo "4. Desacoplamento: com o worker parado a API aceita e a mensagem espera na fila"
-docker compose stop worker >/dev/null 2>&1
+stop_worker
 RUN_C=$(new_run "modelo C" "ridge" 1.6)
 [ "$(upload "$RUN_C" samples/modelo_a.csv)" = 201 ] || fail "upload com worker parado"
 sleep 2
 [ "$(curl -s "$API/runs/$RUN_C" -H "$AUTH" | json 'd["status"]')" != done ] || fail "processou sem worker?"
 [ "$(queue_ready)" = 1 ] || fail "esperava 1 mensagem Ready na fila"
 ok "upload 201, run não processado, 1 mensagem Ready"
-docker compose start worker >/dev/null 2>&1
+start_worker
 wait_run_done "$RUN_C" 90
 ok "worker religado processou o run $RUN_C"
 

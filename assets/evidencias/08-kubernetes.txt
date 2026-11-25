@@ -1,0 +1,56 @@
+$ kubectl -n ml-arena get pods,svc
+NAME                            READY   STATUS      RESTARTS   AGE
+pod/api-65496d6588-c898m        1/1     Running     0          3m15s
+pod/api-65496d6588-s5dh4        1/1     Running     0          3m15s
+pod/db-d8bc5dd79-5jzw6          1/1     Running     0          3m17s
+pod/frontend-5b968db4d4-4kn7l   1/1     Running     0          3m15s
+pod/migrate-6ccgh               0/1     Completed   0          3m16s
+pod/minio-66d975dbb7-k22nv      1/1     Running     0          3m17s
+pod/minio-init-4dpgj            0/1     Completed   0          3m16s
+pod/rabbitmq-f69f87c5d-q2dtl    1/1     Running     0          3m17s
+pod/redis-64f6dd696-shczb       1/1     Running     0          3m17s
+pod/worker-6fbfb56d94-94brz     1/1     Running     0          31s
+pod/worker-6fbfb56d94-qd5dd     1/1     Running     0          31s
+
+NAME                     TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)                         AGE
+service/api              ClusterIP   10.96.28.97     <none>        8000/TCP                        3m15s
+service/api-docs         NodePort    10.96.192.98    <none>        8000:30800/TCP                  3m15s
+service/db               ClusterIP   10.96.76.197    <none>        5432/TCP                        3m17s
+service/frontend         NodePort    10.96.189.85    <none>        8001:30001/TCP                  3m15s
+service/minio            ClusterIP   10.96.108.121   <none>        9000/TCP                        3m17s
+service/minio-public     NodePort    10.96.244.33    <none>        9000:30900/TCP,9001:30901/TCP   3m17s
+service/rabbitmq         ClusterIP   10.96.36.103    <none>        5672/TCP                        3m17s
+service/rabbitmq-panel   NodePort    10.96.153.92    <none>        15672:31672/TCP                 3m17s
+service/redis            ClusterIP   10.96.203.103   <none>        6379/TCP                        3m17s
+
+# Autocura: apaga um pod da API e o Deployment cria outro
+$ kubectl -n ml-arena delete pod api-65496d6588-c898m
+pod "api-65496d6588-c898m" deleted from ml-arena namespace
+$ kubectl -n ml-arena get pods -l app=api
+NAME                   READY   STATUS    RESTARTS   AGE
+api-65496d6588-9fxkn   1/1     Running   0          15s
+api-65496d6588-s5dh4   1/1     Running   0          3m30s
+
+# O Secret não mostra os valores (só o tamanho de cada um)
+$ kubectl -n ml-arena describe secret ml-arena-secrets
+Data
+====
+AWS_ACCESS_KEY_ID:      0 bytes
+AWS_SECRET_ACCESS_KEY:  0 bytes
+AWS_SESSION_TOKEN:      0 bytes
+DB_PASSWORD:            22 bytes
+DB_USER:                7 bytes
+FRONTEND_SECRET_KEY:    43 bytes
+MINIO_ROOT_PASSWORD:    22 bytes
+MINIO_ROOT_USER:        7 bytes
+RABBITMQ_PASSWORD:      22 bytes
+RABBITMQ_USER:          7 bytes
+SECRET_KEY:             43 bytes
+
+# ... mas o pod recebe o valor como variável de ambiente (aqui só se confere que existe)
+$ kubectl -n ml-arena exec deploy/api -- sh -c 'test -n "$DB_PASSWORD" && echo DB_PASSWORD definido'
+DB_PASSWORD definido (22 caracteres)
+
+# As duas réplicas do worker consomem a mesma fila (contagem desde o último scale do e2e)
+pod/worker-6fbfb56d94-94brz: 0 run(s) processado(s)
+pod/worker-6fbfb56d94-qd5dd: 1 run(s) processado(s)

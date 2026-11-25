@@ -1,0 +1,21 @@
+# Configuração que não é secreta: endereços (nomes dos Services), bucket, tabela, região.
+# Os pods recebem tudo como variáveis de ambiente (envFrom), igual ao .env do compose.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ml-arena-config
+  namespace: ml-arena
+data:
+  DB_HOST: db
+  DB_PORT: "5432"
+  DB_NAME: mlarena
+  REDIS_URL: redis://redis:6379/0
+  MINIO_ENDPOINT: http://minio:9000
+  # O navegador abre os links por aqui (NodePort 30900 -> localhost:9000 pelo kind-config).
+  MINIO_PUBLIC_URL: http://localhost:9000
+  MINIO_BUCKET: ml-arena
+  RABBITMQ_HOST: rabbitmq
+  RABBITMQ_PORT: "5672"
+  AWS_REGION: us-east-1
+  DYNAMODB_AUDIT_TABLE: ml-arena-audit
+  API_BASE_URL: http://api:8000

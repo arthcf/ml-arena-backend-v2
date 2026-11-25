@@ -50,7 +50,7 @@ MinIO e o navegador baixa as imagens direto dele.
 | SNS + SQS | Container `rabbitmq` (exchange → fila quorum → DLQ) | `rabbitmq:4.2-management-alpine` |
 | ElastiCache | Container `redis` | `redis:7-alpine` |
 | DynamoDB | **Continua na AWS** (credenciais do Learner Lab) | — |
-| EC2 + ALB + Auto Scaling + ECR | Docker Compose (Kubernetes como extra) | `ml-arena-backend`, `ml-arena-frontend` |
+| EC2 + ALB + Auto Scaling + ECR | Docker Compose ([Kubernetes](#kubernetes-extra) como extra) | `ml-arena-backend`, `ml-arena-frontend` |
 
 ## Pré-requisitos
 
@@ -162,6 +162,43 @@ repositório em 2026. Usamos o **Silo** (`pgsty/silo`), um fork comunitário que
 as mesmas variáveis `MINIO_ROOT_*`, as portas 9000/9001 e o console web. Para a aplicação é o mesmo
 MinIO; o cliente de linha de comando se chama `mcli`. A tag é fixa para o build ser reproduzível.
 
+## Kubernetes (extra)
+
+A mesma aplicação sobe num cluster local com [kind](https://kind.sigs.k8s.io/) (Kubernetes dentro
+de um container Docker). Os manifests ficam em `k8s/`:
+
+| Arquivo | Conteúdo |
+|---|---|
+| `kind-config.yaml` | Cluster de um nó; mapeia os NodePorts para as mesmas portas do compose em `localhost` |
+| `00-namespace.yaml` | Namespace `ml-arena` |
+| `01-configmap.yaml` | Configuração não secreta (hosts, bucket, tabela, região) |
+| `secret.example.yaml` | Exemplo do Secret com valores falsos (o real é criado do `.env`, nunca versionado) |
+| `10-infra.yaml` | Postgres, Redis, RabbitMQ e MinIO: Deployment + PersistentVolumeClaim + Service ClusterIP; NodePort para os painéis e para os links do MinIO |
+| `20-app.yaml` | Jobs `migrate` e `minio-init`; Deployments `api` (2 réplicas), `worker` (2 réplicas) e `frontend`; Services `api` (ClusterIP), `api-docs` e `frontend` (NodePort) |
+
+```bash
+# Pré-requisitos: kind e kubectl instalados; .env preenchido; compose parado (mesmas portas)
+docker compose down
+bash k8s/up.sh                    # cria o cluster, constrói e carrega as imagens, aplica tudo
+K8S=1 bash scripts/e2e.sh         # o mesmo teste ponta a ponta, agora no cluster
+kind delete cluster --name ml-arena   # apaga o cluster
+```
+
+Os endereços são os mesmos do compose (aplicação em http://localhost:8001).
+
+- **ClusterIP × NodePort**: banco, Redis, AMQP, MinIO (rede interna) e a API (chamada pelo frontend)
+  são ClusterIP, alcançáveis só dentro do cluster. O frontend, a documentação da API, os painéis e
+  a API do MinIO (o navegador abre os links pré-assinados) são NodePort.
+- **ConfigMap e Secret**: os pods recebem a configuração como variáveis de ambiente (`envFrom`).
+  O `k8s/up.sh` cria o Secret só com as chaves secretas do `.env`, sem gravar arquivo no
+  repositório; `kubectl describe secret` mostra só o tamanho de cada valor. Secret é base64, não
+  criptografia: a proteção vem de não versioná-lo e do controle de acesso do cluster.
+- **Sem `depends_on`**: a ordem vem de *initContainers* (o Job `migrate` espera o banco; API e worker
+  esperam o banco estar na última migration) e de *probes* (`/health`, `pg_isready`, `redis-cli
+  ping`, `rabbitmq-diagnostics ping`). O código já tolera a fila subir depois.
+- **Autocura e escala**: `kubectl -n ml-arena delete pod <api>` e o Deployment cria outro; as duas
+  réplicas do worker dividem a mesma fila.
+
 ## Solução de problemas
 
 | Sintoma | Causa provável e solução |
@@ -194,6 +231,7 @@ Capturadas numa partida a frio (`docker compose down -v` e `up -d --build`), em 
 | [`05-postgres.txt`](assets/evidencias/05-postgres.txt) | Runs e artifacts persistidos no Postgres |
 | [`06-worker-logs.txt`](assets/evidencias/06-worker-logs.txt) | Worker consumindo: ETAPA 1 (recebida) → 2 → 3 (concluída) |
 | [`07-redes.txt`](assets/evidencias/07-redes.txt) | Frontend alcança só a API; banco, fila e MinIO bloqueados para ele |
+| [`08-kubernetes.txt`](assets/evidencias/08-kubernetes.txt) | Pods e Services no kind, pod da API recriado após delete, Secret sem valores expostos |
 
 <!-- Prints de tela (console do MinIO, painel do RabbitMQ, telas da aplicação e DynamoDB): -->
 <!-- adicionar em assets/prints/ e referenciar aqui. -->
@@ -245,6 +283,7 @@ app/
 worker/             # consome a fila do RabbitMQ e gera os plots de cada CSV
 samples/            # CSVs de exemplo (dois modelos e um inválido)
 scripts/            # e2e.sh e smoke tests do MinIO e do RabbitMQ
+k8s/                # manifests do Kubernetes (kind) e up.sh
 tests/              # pytest
 ```
 
