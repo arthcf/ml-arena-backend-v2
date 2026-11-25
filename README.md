@@ -77,13 +77,13 @@ No `.env`, preencha pelo menos:
 
 | Variável | O que colocar |
 |---|---|
-| `DB_USER`, `DB_PASSWORD`, `DB_NAME` | Qualquer valor; criam o usuário e o banco no container |
+| `DB_USER`, `DB_PASSWORD` | Qualquer valor; criam o usuário do banco no container |
 | `SECRET_KEY`, `FRONTEND_SECRET_KEY` | Dois segredos diferentes: `python3 -c 'import secrets; print(secrets.token_urlsafe(32))'` |
 | `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD` | Qualquer valor (senha com **8+ caracteres**) |
 | `RABBITMQ_USER`, `RABBITMQ_PASSWORD` | Qualquer valor |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | Learner Lab → *AWS Details* → *AWS CLI: Show*. **Expiram a cada sessão do lab** |
 
-Os demais (hosts, portas, bucket, tabela) já vêm preenchidos. Se faltar uma variável obrigatória, o
+Os demais (hosts, portas, nome do banco, bucket, tabela, região) já vêm preenchidos. Se faltar uma variável obrigatória, o
 compose para com a mensagem `defina ... no .env` em vez de subir com valores errados.
 
 ```bash
