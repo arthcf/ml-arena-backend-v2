@@ -1,7 +1,7 @@
 """Configuração da aplicação, lida das variáveis de ambiente (ou do `.env`).
 
 Usado por praticamente tudo: `app/db/session.py` (banco), `app/core/security.py`
-(JWT), `app/services/storage.py` (S3), `app/services/messaging.py` (SNS),
+(JWT), `app/core/object_storage.py` (MinIO), `app/services/messaging.py` (SNS),
 `worker/consumer.py` (SQS). Se uma variável obrigatória faltar, o import falha
 e a aplicação nem sobe, em vez de quebrar numa requisição qualquer.
 """
@@ -26,9 +26,16 @@ class Settings(BaseSettings):
     secret_key: str
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24 * 7
-    # AWS: região, bucket, tópico, fila e tabela de auditoria
+    # MinIO (S3 compatível). Duas URLs: `minio_endpoint` é o endereço na rede do compose,
+    # usado por API e worker; `minio_public_url` é o que o navegador alcança e só serve para
+    # assinar os links pré-assinados (o host entra na assinatura, não dá para trocar depois).
+    minio_endpoint: str
+    minio_public_url: str
+    minio_root_user: str
+    minio_root_password: str
+    minio_bucket: str = "ml-arena"
+    # AWS: região, tópico, fila e tabela de auditoria
     aws_region: str
-    s3_bucket_name: str
     sns_topic_arn: str
     sqs_queue_url: str
     dynamodb_audit_table: str | None = None
