@@ -118,5 +118,46 @@ def test_failed_e_regravado_ate_o_banco_voltar(monkeypatch):
 
     monkeypatch.setattr(consumer, "_mark_failed", flaky_mark_failed)
     monkeypatch.setattr(consumer, "RETRY_DELAY_S", 0)
-    asyncio.run(consumer._mark_failed_until_saved(5, "falhou"))
+    assert asyncio.run(consumer._mark_failed_until_saved(5, "falhou")) is True
     assert tries == [5, 5, 5]
+
+
+def _failing_mark_failed(monkeypatch, exc):
+    """_mark_failed que sempre falha com `exc`; devolve a lista de chamadas."""
+    tries = []
+
+    async def broken(run_id, message):
+        tries.append(run_id)
+        raise exc
+
+    monkeypatch.setattr(consumer, "_mark_failed", broken)
+    monkeypatch.setattr(consumer, "RETRY_DELAY_S", 0)
+    return tries
+
+
+def test_erro_que_nao_passa_sozinho_desiste_na_hora(monkeypatch):
+    """Bug ou constraint: insistir prenderia o worker para sempre."""
+    tries = _failing_mark_failed(monkeypatch, RuntimeError("bug"))
+    assert asyncio.run(consumer._mark_failed_until_saved(5, "falhou")) is False
+    assert tries == [5]
+
+
+def test_banco_fora_desiste_depois_do_prazo(monkeypatch):
+    tries = _failing_mark_failed(monkeypatch, ConnectionRefusedError())
+    monkeypatch.setattr(consumer, "MARK_FAILED_TIMEOUT_S", 0)
+    assert asyncio.run(consumer._mark_failed_until_saved(5, "falhou")) is False
+    assert tries == [5]
+
+
+@pytest.mark.parametrize("attempt", [1, consumer.MAX_ATTEMPTS])
+def test_sem_gravar_o_failed_a_mensagem_vai_para_a_dlq(monkeypatch, attempt):
+    """Erro de dado (1ª tentativa) ou esgotou as tentativas: sem o failed, reject → DLQ."""
+    _failing_mark_failed(monkeypatch, RuntimeError("bug"))
+
+    async def process(run_id):
+        raise ValueError("csv ruim") if attempt == 1 else ConnectionError("minio")
+
+    monkeypatch.setattr(consumer, "process_run", process)
+    message = _run_message(attempt=attempt)
+    asyncio.run(consumer.handle_message(message))
+    assert message.responses == ["reject(requeue=False)"]
