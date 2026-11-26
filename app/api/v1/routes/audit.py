@@ -29,7 +29,7 @@ async def list_my_actions(
     try:
         return await audit_service.list_user_actions(current_user.id, limit)
     except (BotoCoreError, ClientError):
-        # Causa mais comum: credenciais do Learner Lab vencidas ou ausentes no .env.
+        # Causa mais comum: credenciais da AWS ausentes no .env ou região errada.
         logger.exception("Falha ao consultar a auditoria no DynamoDB.")
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,

@@ -104,7 +104,7 @@ ok "segundo CSV no mesmo run: 409"
 [ "$(status_of "$API/runs")" = 401 ] || fail "sem token deveria dar 401"
 ok "sem token: 401"
 
-echo "6. Auditoria (DynamoDB): 200 com credenciais do Learner Lab, 503 sem"
+echo "6. Auditoria (DynamoDB): 200 com credenciais da AWS no .env, 503 sem"
 code=$(status_of "$API/audit" -H "$AUTH")
 case "$code" in 200 | 503) ok "GET /audit: $code" ;; *) fail "GET /audit: $code" ;; esac
 

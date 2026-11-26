@@ -1,7 +1,7 @@
 """Auditoria: grava as ações dos usuários e as devolve ao próprio usuário.
 
 Gravar roda em background (BackgroundTasks nas rotas, ou no worker): se o DynamoDB falhar
-(ex.: credenciais do Learner Lab vencidas), a requisição não é afetada; só o log não grava.
+(ex.: credenciais da AWS ausentes), a requisição não é afetada; só o log não grava.
 """
 
 import logging
@@ -48,7 +48,7 @@ async def log_user_action(
     except (BotoCoreError, ClientError) as exc:
         # Roda em background: sem isto, cada falha vira um traceback "Exception in ASGI
         # application" no log da API, que parece queda mas não é. Uma linha basta; a causa
-        # comum é credencial do Learner Lab vencida ou ausente.
+        # comum é credencial ausente ou região sem a tabela.
         logger.warning("Auditoria não gravada (%s): %s", action, exc)
 
 
