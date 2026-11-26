@@ -1,0 +1,8 @@
+$ docker compose exec db psql -c "select ... from runs left join artifacts"
+ id |   name   | status  | dur_s | artifacts 
+----+----------+---------+-------+-----------
+  2 | modelo B | done    |  0.38 |         3
+  3 | modelo C | done    |  1.03 |         3
+  4 | inválido | created |       |         0
+(3 rows)
+

@@ -34,7 +34,8 @@ target_metadata = Base.metadata
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
 # ... etc.
-config.set_main_option("sqlalchemy.url", str(settings.database_url))
+# O Alembic guarda a URL num ConfigParser, que lê % como interpolação: dobra para escapar.
+config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 
 
 def run_migrations_offline() -> None:

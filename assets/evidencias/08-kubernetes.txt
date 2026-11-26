@@ -1,0 +1,72 @@
+$ kubectl -n ml-arena get pods,svc
+NAME                            READY   STATUS      RESTARTS   AGE
+pod/api-9d785b5d8-8d7t4         1/1     Running     0          2m6s
+pod/api-9d785b5d8-m5mgz         1/1     Running     0          2m6s
+pod/db-666b6fc8f4-r8mbx         1/1     Running     0          2m11s
+pod/frontend-5cf5bc6c7f-k6kr8   1/1     Running     0          2m5s
+pod/migrate-sbjwk               0/1     Completed   0          2m7s
+pod/minio-f86495597-dxchm       1/1     Running     0          2m10s
+pod/minio-init-7fcs6            0/1     Completed   0          2m6s
+pod/rabbitmq-86b69c474c-nggpt   1/1     Running     0          2m10s
+pod/redis-7b9b886db-tnrcz       1/1     Running     0          2m11s
+pod/worker-9dc454dd-bvtwz       1/1     Running     0          2m6s
+pod/worker-9dc454dd-fx6q2       1/1     Running     0          2m6s
+
+NAME                     TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)                         AGE
+service/api              ClusterIP   10.96.114.255   <none>        8000/TCP                        2m6s
+service/api-docs         NodePort    10.96.23.196    <none>        8000:30800/TCP                  2m6s
+service/db               ClusterIP   10.96.61.190    <none>        5432/TCP                        2m11s
+service/frontend         NodePort    10.96.141.234   <none>        8001:30001/TCP                  2m5s
+service/minio            ClusterIP   10.96.160.199   <none>        9000/TCP                        2m10s
+service/minio-public     NodePort    10.96.150.51    <none>        9000:30900/TCP,9001:30901/TCP   2m10s
+service/rabbitmq         ClusterIP   10.96.198.179   <none>        5672/TCP                        2m10s
+service/rabbitmq-panel   NodePort    10.96.86.193    <none>        15672:31672/TCP                 2m10s
+service/redis            ClusterIP   10.96.142.65    <none>        6379/TCP                        2m11s
+
+$ K8S=1 bash scripts/e2e.sh
+1. Cadastro e login
+  ok usuário e2e-1795654095@example.com
+2. Dois runs, upload e processamento pelo worker
+  ok runs 1 e 2: done
+3. Comparação: links pré-assinados do MinIO abrem no navegador
+  ok 4 PNGs em localhost:9000 com assinatura, todos 200
+4. Desacoplamento: com o worker parado a API aceita e a mensagem espera na fila
+  ok upload 201, run não processado, 1 mensagem Ready
+  ok worker religado processou o run 3
+5. Falhas esperadas
+  ok CSV inválido: 422
+  ok segundo CSV no mesmo run: 409
+  ok sem token: 401
+6. Auditoria (DynamoDB): 200 com credenciais do Learner Lab, 503 sem
+  ok GET /audit: 503
+7. Remover um run apaga os objetos do MinIO
+  ok run 1 removido; o link do plot agora dá 404
+
+Tudo certo.
+
+# Autocura: apaga um pod da API e o Deployment cria outro
+$ kubectl -n ml-arena delete pod api-9d785b5d8-8d7t4
+pod "api-9d785b5d8-8d7t4" deleted from ml-arena namespace
+NAME                  READY   STATUS    RESTARTS   AGE
+api-9d785b5d8-jbz87   1/1     Running   0          20s
+api-9d785b5d8-m5mgz   1/1     Running   0          3m39s
+
+# O Secret não mostra os valores, só o tamanho
+$ kubectl -n ml-arena describe secret ml-arena-secrets
+Data
+====
+AWS_ACCESS_KEY_ID:      0 bytes
+AWS_SECRET_ACCESS_KEY:  0 bytes
+AWS_SESSION_TOKEN:      0 bytes
+DB_PASSWORD:            11 bytes
+DB_USER:                6 bytes
+FRONTEND_SECRET_KEY:    43 bytes
+MINIO_ROOT_PASSWORD:    20 bytes
+MINIO_ROOT_USER:        6 bytes
+RABBITMQ_PASSWORD:      16 bytes
+RABBITMQ_USER:          6 bytes
+SECRET_KEY:             43 bytes
+
+# ... mas o pod recebe o valor como variável de ambiente
+Defaulted container "api" out of: api, wait-migrations (init)
+DB_PASSWORD definido

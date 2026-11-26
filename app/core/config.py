@@ -1,10 +1,12 @@
 """Configuração da aplicação, lida das variáveis de ambiente (ou do `.env`).
 
 Usado por praticamente tudo: `app/db/session.py` (banco), `app/core/security.py`
-(JWT), `app/services/storage.py` (S3), `app/services/messaging.py` (SNS),
-`worker/consumer.py` (SQS). Se uma variável obrigatória faltar, o import falha
+(JWT), `app/core/object_storage.py` (MinIO), `app/services/messaging.py` e
+`worker/consumer.py` (RabbitMQ), `app/core/aws.py` (DynamoDB). Se uma variável obrigatória faltar, o import falha
 e a aplicação nem sobe, em vez de quebrar numa requisição qualquer.
 """
+
+from urllib.parse import quote
 
 from pydantic import computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -26,12 +28,22 @@ class Settings(BaseSettings):
     secret_key: str
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24 * 7
-    # AWS: região, bucket, tópico, fila e tabela de auditoria
+    # MinIO (S3 compatível). Duas URLs: `minio_endpoint` é o endereço na rede do compose,
+    # usado por API e worker; `minio_public_url` é o que o navegador alcança e só serve para
+    # assinar os links pré-assinados (o host entra na assinatura, não dá para trocar depois).
+    minio_endpoint: str
+    minio_public_url: str
+    minio_root_user: str
+    minio_root_password: str
+    minio_bucket: str = "ml-arena"
+    # RabbitMQ (no T1 eram SNS + SQS). A URL é montada abaixo, como a do banco.
+    rabbitmq_host: str
+    rabbitmq_port: int = 5672
+    rabbitmq_user: str
+    rabbitmq_password: str
+    # AWS: só o DynamoDB (tabela de auditoria) continua na AWS
     aws_region: str
-    s3_bucket_name: str
-    sns_topic_arn: str
-    sqs_queue_url: str
-    dynamodb_audit_table: str | None = None
+    dynamodb_audit_table: str
     redis_url: str
     # Chaves opcionais: se ausentes, o boto3 usa a cadeia padrão (ambiente, IAM role)
     aws_access_key_id: str | None = None
@@ -46,8 +58,18 @@ class Settings(BaseSettings):
     @computed_field
     @property
     def database_url(self) -> str:
-        """URL assíncrona do banco, montada a partir das partes acima."""
-        return f"postgresql+asyncpg://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
+        """URL assíncrona do banco. Usuário e senha vão escapados, como na do RabbitMQ."""
+        user = quote(self.db_user, safe="")
+        password = quote(self.db_password, safe="")
+        return f"postgresql+asyncpg://{user}:{password}@{self.db_host}:{self.db_port}/{self.db_name}"
+
+    @computed_field
+    @property
+    def rabbitmq_url(self) -> str:
+        """URL AMQP do RabbitMQ. Usuário e senha vão escapados (ex.: `@` ou `/` na senha)."""
+        user = quote(self.rabbitmq_user, safe="")
+        password = quote(self.rabbitmq_password, safe="")
+        return f"amqp://{user}:{password}@{self.rabbitmq_host}:{self.rabbitmq_port}/"
 
 
 # Instância única, criada no import. Os outros módulos fazem `from app.core.config import settings`.

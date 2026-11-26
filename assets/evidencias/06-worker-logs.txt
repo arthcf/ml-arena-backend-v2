@@ -1,0 +1,12 @@
+$ docker compose logs worker
+2026-11-26 00:33:39,389 INFO worker: Worker escutando a fila csv-processing
+2026-11-26 00:33:54,196 INFO worker: ETAPA 1 recebida: run 1 (tentativa 1).
+2026-11-26 00:33:54,505 INFO worker: ETAPA 2 iniciada: run 1, baixando o CSV.
+2026-11-26 00:33:57,700 INFO worker: ETAPA 3 concluída: run 1 processado.
+2026-11-26 00:33:57,729 INFO worker: ETAPA 1 recebida: run 2 (tentativa 1).
+2026-11-26 00:33:57,749 INFO worker: ETAPA 2 iniciada: run 2, baixando o CSV.
+2026-11-26 00:34:00,156 INFO worker: ETAPA 3 concluída: run 2 processado.
+2026-11-26 00:34:21,584 INFO worker: Worker escutando a fila csv-processing
+2026-11-26 00:34:21,651 INFO worker: ETAPA 1 recebida: run 3 (tentativa 1).
+2026-11-26 00:34:21,803 INFO worker: ETAPA 2 iniciada: run 3, baixando o CSV.
+2026-11-26 00:34:24,956 INFO worker: ETAPA 3 concluída: run 3 processado.

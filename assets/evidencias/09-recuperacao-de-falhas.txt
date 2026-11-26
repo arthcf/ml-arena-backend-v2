@@ -1,0 +1,38 @@
+# Cada dependência é derrubada com uma mensagem na fila; depois ela volta e o CSV é reenviado.
+# Nas linhas "filas:", as colunas são: nome, mensagens esperando (ready), em processamento (unacked).
+== B. MinIO fora enquanto o worker processa
+upload: 201 em 0.056807s
+minio continua parado? Exited (0) 2 minutes ago
+00:34:56,143 INFO worker: ETAPA 1 recebida: run 5 (tentativa 1).
+00:34:56,268 INFO worker: ETAPA 2 iniciada: run 5, baixando o CSV.
+00:35:06,318 ERROR worker: Run 5: erro na tentativa 1; volta à fila em 5s.
+00:35:11,352 INFO worker: ETAPA 1 recebida: run 5 (tentativa 2).
+00:35:11,387 INFO worker: ETAPA 2 iniciada: run 5, baixando o CSV.
+00:35:16,035 ERROR worker: Run 5: erro na tentativa 2; volta à fila em 10s.
+00:35:26,072 INFO worker: ETAPA 1 recebida: run 5 (tentativa 3).
+00:35:26,088 INFO worker: ETAPA 2 iniciada: run 5, baixando o CSV.
+00:35:32,890 ERROR worker: Run 5: esgotou as 3 tentativas.
+-- minio de volta ha 30s:
+run=failed artifacts=[('csv_measured_predicted', 'failed'), ('plot_measured_predicted', 'failed'), ('plot_residuals', 'failed')]
+filas: csv-processing	0	0;csv-processing.dlq	0	0;
+reenvio do mesmo CSV: 201 em 0.276254s
+depois do reenvio: run=done artifacts=[('csv_measured_predicted', 'done'), ('plot_measured_predicted', 'done'), ('plot_residuals', 'done')]
+filas: csv-processing	0	0;csv-processing.dlq	0	0;
+== D. Banco fora enquanto o worker processa
+upload: 201 em 0.079561s
+db continua parado? Exited (0) About a minute ago
+00:38:29,372 INFO worker: ETAPA 1 recebida: run 6 (tentativa 1).
+00:38:29,394 ERROR worker: Run 6: erro na tentativa 1; volta à fila em 5s.
+00:38:35,129 INFO worker: ETAPA 1 recebida: run 6 (tentativa 2).
+00:38:35,142 ERROR worker: Run 6: erro na tentativa 2; volta à fila em 10s.
+00:38:45,170 INFO worker: ETAPA 1 recebida: run 6 (tentativa 3).
+00:38:45,187 ERROR worker: Run 6: esgotou as 3 tentativas.
+00:38:45,199 ERROR worker: Run 6: não foi possível gravar o failed; nova tentativa em 5s.
+00:38:50,232 ERROR worker: Run 6: não foi possível gravar o failed; nova tentativa em 5s.
+    [... a mesma linha se repete a cada 5 s enquanto o banco está fora: mais 15 vezes ...]
+-- db de volta ha 30s:
+run=failed artifacts=[('csv_measured_predicted', 'failed')]
+filas: csv-processing	0	0;csv-processing.dlq	0	0;
+reenvio do mesmo CSV: 201 em 0.357270s
+depois do reenvio: run=done artifacts=[('csv_measured_predicted', 'done'), ('plot_measured_predicted', 'done'), ('plot_residuals', 'done')]
+filas: csv-processing	0	0;csv-processing.dlq	0	0;

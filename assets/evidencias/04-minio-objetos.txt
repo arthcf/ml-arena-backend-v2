@@ -1,0 +1,7 @@
+$ mcli ls --recursive local/ml-arena
+[2026-11-26 00:33:54 UTC] 2.7KiB STANDARD runs/2/measured_predicted.csv
+[2026-11-26 00:33:58 UTC]  31KiB STANDARD runs/2/plots/measured_predicted.png
+[2026-11-26 00:33:58 UTC]  24KiB STANDARD runs/2/plots/residuals.png
+[2026-11-26 00:34:10 UTC] 2.7KiB STANDARD runs/3/measured_predicted.csv
+[2026-11-26 00:34:22 UTC]  31KiB STANDARD runs/3/plots/measured_predicted.png
+[2026-11-26 00:34:22 UTC]  23KiB STANDARD runs/3/plots/residuals.png

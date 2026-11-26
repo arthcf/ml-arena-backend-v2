@@ -1,8 +1,8 @@
 """Regras de negócio das runs: dono, CRUD, comparação e upload do CSV.
 
 Este é o cérebro entre as rotas (`app/api/v1/routes/runs.py`) e os repositórios.
-Chama `run_repository` e `artifact_repository` (banco), `storage` (S3),
-`messaging` (SNS) e `csv_validation` (checagem do CSV). Erros de regra viram HTTPException.
+Chama `run_repository` e `artifact_repository` (banco), `storage` (MinIO),
+`messaging` (RabbitMQ) e `csv_validation` (checagem do CSV). Erros de regra viram HTTPException.
 """
 
 import logging
@@ -28,6 +28,7 @@ from app.services.csv_validation import (
     CsvValidationError,
     validate_measured_predicted_csv,
 )
+from app.services.messaging import MessagingError
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ PLOT_ARTIFACT_TYPES = {
     "residuals": "plot_residuals",
 }
 MEASURED_PREDICTED_CSV = "csv_measured_predicted"
+UPLOAD_FAILED_MESSAGE = "Falha ao processar o envio do CSV. Tente de novo."
 
 
 async def get_owned_run_or_404(
@@ -190,29 +192,39 @@ async def upload_measured_predicted(
 
     artifact = await _start_csv_upload(session, run)
 
-    # Sobe o arquivo e depois avisa o worker. Se qualquer um dos dois falhar, o artifact
-    # fica failed e o reenvio funciona (a mesma regra do item 2).
+    # Sobe o arquivo, marca o CSV como done e só então avisa o worker. A ordem importa: o
+    # RabbitMQ entrega em milissegundos, e o worker recusa CSV que não esteja done. Se marcasse
+    # depois de publicar, o worker poderia chegar antes do commit e falhar o run sem motivo.
+    # O run vai para processing também antes de publicar (depois, poderia sobrescrever o done
+    # do worker). Assim a tela não oferece outro upload enquanto a mensagem espera na fila.
+    # Se o upload ou a publicação falhar, run e artifact ficam failed e o reenvio funciona.
     try:
         await storage.upload_measured_predicted(run.id, data)
+        updated_artifact = await artifact_repository.update_artifact(
+            session, artifact, status="done", size_bytes=len(data)
+        )
+        await run_repository.update_run(
+            session, run, {"status": "processing", "error_message": None}
+        )
         await messaging.publish_csv_uploaded(
             run.id, artifact.s3_key, MEASURED_PREDICTED_CSV
         )
-    except (BotoCoreError, ClientError):
-        # Mensagem genérica: o erro bruto do boto3 pode expor nome de bucket e detalhes da AWS.
+    except (BotoCoreError, ClientError, MessagingError):
+        # Mensagem genérica: o erro bruto pode expor nome de bucket, host e detalhes internos.
+        logger.exception("Run %s: falha no envio do CSV.", run.id)
         await artifact_repository.update_artifact(
             session,
             artifact,
             status="failed",
-            error_message="Falha ao processar o envio do CSV. Tente de novo.",
+            error_message=UPLOAD_FAILED_MESSAGE,
         )
+        await run_repository.update_run(
+            session, run, {"status": "failed", "error_message": UPLOAD_FAILED_MESSAGE}
+        )
+        await invalidate_user_cache(user_id)
         raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY,
-            "Falha ao processar o envio do CSV. Tente de novo.",
+            status.HTTP_502_BAD_GATEWAY, UPLOAD_FAILED_MESSAGE
         ) from None
-
-    updated_artifact = await artifact_repository.update_artifact(
-        session, artifact, status="done", size_bytes=len(data)
-    )
 
     await invalidate_user_cache(user_id)
 
