@@ -16,6 +16,6 @@ data:
   MINIO_BUCKET: ml-arena
   RABBITMQ_HOST: rabbitmq
   RABBITMQ_PORT: "5672"
-  AWS_REGION: us-east-1
+  AWS_REGION: us-east-2
   DYNAMODB_AUDIT_TABLE: ml-arena-audit
   API_BASE_URL: http://api:8000

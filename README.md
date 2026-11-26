@@ -65,7 +65,7 @@ No `.env`, preencha:
 | `SECRET_KEY`, `FRONTEND_SECRET_KEY` | Dois segredos **diferentes**: `python3 -c 'import secrets; print(secrets.token_urlsafe(32))'` |
 | `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD` | Qualquer valor (senha com **8+ caracteres**) |
 | `RABBITMQ_USER`, `RABBITMQ_PASSWORD` | Qualquer valor |
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | Opcional para subir. Necessárias só para a auditoria (AWS Learner Lab → *AWS Details* → *AWS CLI*) |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | Opcional para subir. Necessárias só para a auditoria: chave de um usuário IAM, com o token vazio (veja [Configurar o DynamoDB](#configurar-o-dynamodb)) |
 
 > Em senhas, evite `$`: o Compose o interpreta como início de variável.
 
@@ -519,11 +519,11 @@ chama `mcli`. A tag é fixa.
 
 | Item | Situação |
 |---|---|
-| **DynamoDB com a AWS real** | **Ainda não validado neste trabalho.** A consulta tem testes com tabela falsa; sem credenciais, a tela Atividade mostra "Auditoria indisponível" e o resto funciona. Veja o [roteiro de validação](#validar-o-dynamodb) |
+| DynamoDB sem credenciais | A tela Atividade mostra "Auditoria indisponível" e o resto funciona. Validado com a AWS real em 2026-11-26 (`GET /audit` = 200 no e2e); veja [Configurar o DynamoDB](#configurar-o-dynamodb) |
 | Editar um run pela interface | A API tem `PATCH /runs/{id}` (use o `/docs`); o frontend não tem essa tela |
 | Mensagens na DLQ | Ficam para inspeção manual; não há reprocessamento automático |
 | Worker que morre várias vezes na mesma mensagem | A mensagem vai para a DLQ e o run pode ficar em `processing` |
-| Queda muito longa do banco | O RabbitMQ tem um prazo para o `ack` (30 min por padrão). Esse caso não foi testado |
+| Queda longa do banco | O worker insiste até 10 min em gravar o `failed` (abaixo do prazo de 30 min do RabbitMQ para o `ack`); depois, a mensagem vai para a DLQ e o run fica em `processing`. Coberto por teste unitário, não provocado de verdade |
 | Credenciais do MinIO | A aplicação usa o usuário raiz; em produção seria um usuário restrito ao bucket |
 | Alta disponibilidade | Banco, fila e MinIO têm uma única instância, e não há Auto Scaling |
 
@@ -604,16 +604,44 @@ em um cluster: recria pods, controla réplicas e dá endereços estáveis com Se
 | `POST` | `/api/v1/runs/{id}/measured-predicted` | Envia o CSV (`measured,predicted`) |
 | `GET` | `/api/v1/audit?limit=` | Últimas ações do usuário (DynamoDB) |
 
-### Validar o DynamoDB
+### Configurar o DynamoDB
 
-A tabela precisa ter partition key `user_id` e sort key `timestamp`, ambas String. O nome vai em
-`DYNAMODB_AUDIT_TABLE`.
+A auditoria usa uma conta AWS comum (plano Free). A tabela fica em **`us-east-2`** (`AWS_REGION`).
 
-1. Preencha as 3 credenciais no `.env`.
-2. `docker compose up -d --force-recreate api worker`.
-3. Faça login, crie um run e envie um CSV.
-4. Abra **Atividade**: devem aparecer `LOGIN`, `CREATE_RUN`, `UPLOAD_CSV` e `PROCESS_RUN_DONE`.
-5. No console da AWS: DynamoDB → Tables → sua tabela → *Explore items*.
+**Tabela:** nome `ml-arena-audit` (`DYNAMODB_AUDIT_TABLE`), partition key `user_id` e sort key
+`timestamp`, ambas String. Modo **provisionado com 1 RCU e 1 WCU**: a cota grátis permanente do
+DynamoDB vale para o modo provisionado; o sob demanda cobra por requisição.
+
+**Credenciais:** um usuário IAM só para a aplicação (nunca a chave do root), com esta política:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": ["dynamodb:CreateTable", "dynamodb:DescribeTable",
+               "dynamodb:PutItem", "dynamodb:Query"],
+    "Resource": "arn:aws:dynamodb:us-east-2:*:table/ml-arena-audit"
+  }]
+}
+```
+
+No `.env`, `AWS_ACCESS_KEY_ID` e `AWS_SECRET_ACCESS_KEY` recebem a chave do usuário (começa com
+`AKIA`) e `AWS_SESSION_TOKEN` fica vazio.
+
+> [!WARNING]
+> **Conta criada pelo cadastro novo da AWS:** ela é um *projeto* numa organização gerenciada pela
+> AWS, e uma política dessa organização (SCP) só libera o DynamoDB na **região do projeto**
+> (settings.aws.com → *Projects* → projeto → *Additional info* → *Region*). Em outra região o erro é
+> `AccessDeniedException ... explicit deny in a service control policy`, e nenhuma permissão IAM
+> resolve. Use essa região no `AWS_REGION` e no ARN da política.
+
+**Conferir:**
+1. `docker compose up -d --force-recreate api worker` (para ler o `.env` novo).
+2. `bash scripts/e2e.sh`: a etapa 6 deve dar `GET /audit: 200`.
+3. Na interface, abra **Atividade**: devem aparecer `CREATE_USER`, `LOGIN`, `CREATE_RUN`,
+   `UPLOAD_CSV` e `PROCESS_RUN_DONE`.
+4. No console da AWS (região `us-east-2`): DynamoDB → Tables → `ml-arena-audit` → *Explore items*.
 
 ### Solução de problemas
 
@@ -621,7 +649,8 @@ A tabela precisa ter partition key `user_id` e sort key `timestamp`, ambas Strin
 |---|---|
 | `defina XXX no .env` | Preencha a variável |
 | `container name ... is already in use` | Há containers antigos com o mesmo nome. Veja com `docker ps -a` e remova o projeto antigo com `docker compose -p <projeto> down` |
-| **Atividade** indisponível; log `Auditoria não gravada` | Credenciais da AWS ausentes ou vencidas. Atualize o `.env` e recrie `api` e `worker` |
+| **Atividade** indisponível; log `Auditoria não gravada` | Credenciais da AWS ausentes, ou `AWS_REGION` diferente da região da tabela. Atualize o `.env` e recrie `api` e `worker` |
+| `explicit deny in a service control policy` | A região não é a do projeto da conta AWS. Veja [Configurar o DynamoDB](#configurar-o-dynamodb) |
 | `port is already allocated` | Outro programa usa 8000, 8001, 9000, 9001 ou 15672 |
 | Imagens quebradas ao acessar de outra máquina | Ajuste `MINIO_PUBLIC_URL` para o endereço dela e recrie a `api` |
 | Run parado em `processing` | `docker compose logs worker` e o painel do RabbitMQ |
