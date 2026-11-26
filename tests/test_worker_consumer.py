@@ -105,3 +105,18 @@ def test_erro_inesperado_na_ultima_tentativa_marca_failed(calls):
     asyncio.run(consumer.handle_message(message))
     assert calls["failed"] == [1]
     assert message.responses == ["ack"]
+
+
+def test_failed_e_regravado_ate_o_banco_voltar(monkeypatch):
+    """Banco fora: o worker insiste em vez de deixar a mensagem ir para a DLQ."""
+    tries = []
+
+    async def flaky_mark_failed(run_id, message):
+        tries.append(run_id)
+        if len(tries) < 3:
+            raise ConnectionError("banco fora")
+
+    monkeypatch.setattr(consumer, "_mark_failed", flaky_mark_failed)
+    monkeypatch.setattr(consumer, "RETRY_DELAY_S", 0)
+    asyncio.run(consumer._mark_failed_until_saved(5, "falhou"))
+    assert tries == [5, 5, 5]

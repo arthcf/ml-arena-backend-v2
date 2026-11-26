@@ -195,11 +195,16 @@ async def upload_measured_predicted(
     # Sobe o arquivo, marca o CSV como done e só então avisa o worker. A ordem importa: o
     # RabbitMQ entrega em milissegundos, e o worker recusa CSV que não esteja done. Se marcasse
     # depois de publicar, o worker poderia chegar antes do commit e falhar o run sem motivo.
-    # Se o upload ou a publicação falhar, o artifact fica failed e o reenvio funciona.
+    # O run vai para processing também antes de publicar (depois, poderia sobrescrever o done
+    # do worker). Assim a tela não oferece outro upload enquanto a mensagem espera na fila.
+    # Se o upload ou a publicação falhar, run e artifact ficam failed e o reenvio funciona.
     try:
         await storage.upload_measured_predicted(run.id, data)
         updated_artifact = await artifact_repository.update_artifact(
             session, artifact, status="done", size_bytes=len(data)
+        )
+        await run_repository.update_run(
+            session, run, {"status": "processing", "error_message": None}
         )
         await messaging.publish_csv_uploaded(
             run.id, artifact.s3_key, MEASURED_PREDICTED_CSV
@@ -213,6 +218,10 @@ async def upload_measured_predicted(
             status="failed",
             error_message=UPLOAD_FAILED_MESSAGE,
         )
+        await run_repository.update_run(
+            session, run, {"status": "failed", "error_message": UPLOAD_FAILED_MESSAGE}
+        )
+        await invalidate_user_cache(user_id)
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY, UPLOAD_FAILED_MESSAGE
         ) from None

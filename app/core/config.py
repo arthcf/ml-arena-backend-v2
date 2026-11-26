@@ -58,8 +58,10 @@ class Settings(BaseSettings):
     @computed_field
     @property
     def database_url(self) -> str:
-        """URL assíncrona do banco, montada a partir das partes acima."""
-        return f"postgresql+asyncpg://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
+        """URL assíncrona do banco. Usuário e senha vão escapados, como na do RabbitMQ."""
+        user = quote(self.db_user, safe="")
+        password = quote(self.db_password, safe="")
+        return f"postgresql+asyncpg://{user}:{password}@{self.db_host}:{self.db_port}/{self.db_name}"
 
     @computed_field
     @property

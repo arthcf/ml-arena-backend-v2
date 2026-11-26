@@ -137,15 +137,20 @@ async def process_run(run_id: int) -> None:
 
 
 async def _mark_failed(run_id: int, message: str) -> None:
-    """Marca o run e os artifacts pendentes como failed, com o motivo. Usado quando não há mais o que tentar."""
+    """Marca o run e seus artifacts como failed, com o motivo. Usado quando não há mais o que tentar.
+
+    O CSV também vira failed, mesmo já estando no MinIO: é o que libera o reenvio pela API
+    (`run_service._start_csv_upload` só aceita um novo CSV se o anterior estiver failed).
+    """
     async with session_scope() as session:
         run = await session.get(Run, run_id)
-        if run is None:
+        # done: o processamento terminou e só um passo posterior falhou; não há o que desfazer.
+        if run is None or run.status == "done":
             return
         for artifact in await artifact_repository.list_artifacts_for_run(
             session, run_id
         ):
-            if artifact.status in ("pending", "processing"):
+            if artifact.status != "failed":
                 await artifact_repository.update_artifact(
                     session, artifact, status="failed", error_message=message
                 )
@@ -158,7 +163,32 @@ async def _mark_failed(run_id: int, message: str) -> None:
         run_id=run_id,
         details={"error_message": message},
     )
-    await invalidate_user_cache(user_id=run.user_id)
+    try:
+        await invalidate_user_cache(user_id=run.user_id)
+    except Exception:
+        # O failed já está gravado; sem o Redis, o cache antigo só expira pelo TTL.
+        logger.exception("Run %s: não foi possível invalidar o cache.", run_id)
+
+
+async def _mark_failed_until_saved(run_id: int, message: str) -> None:
+    """Insiste até conseguir gravar o failed (ex.: o banco está fora).
+
+    Desistir aqui deixaria o run travado: a mensagem estouraria o limite de entregas, iria
+    para a DLQ e ninguém atualizaria o banco. Segurar a mensagem (sem ack) é seguro: se o
+    worker morrer durante a espera, ela volta para a fila. Com o banco fora, este worker não
+    conseguiria processar outra mensagem de qualquer forma.
+    """
+    while True:
+        try:
+            await _mark_failed(run_id, message)
+            return
+        except Exception:
+            logger.exception(
+                "Run %s: não foi possível gravar o failed; nova tentativa em %ss.",
+                run_id,
+                RETRY_DELAY_S,
+            )
+            await asyncio.sleep(RETRY_DELAY_S)
 
 
 def _attempt(message: AbstractIncomingMessage) -> int:
@@ -188,7 +218,9 @@ async def handle_message(message: AbstractIncomingMessage) -> None:
     except PERMANENT_ERRORS as exc:
         # O detalhe técnico vai pro log; o usuário vê só a mensagem geral.
         logger.warning("Run %s: CSV não pôde ser processado: %r", run_id, exc)
-        await _mark_failed(run_id, "Processamento falhou: o CSV não pôde ser lido.")
+        await _mark_failed_until_saved(
+            run_id, "Processamento falhou: o CSV não pôde ser lido."
+        )
     except Exception:
         # Infraestrutura (MinIO, banco, Redis) ou erro inesperado: vale tentar de novo.
         if attempts < MAX_ATTEMPTS:
@@ -205,7 +237,9 @@ async def handle_message(message: AbstractIncomingMessage) -> None:
             await message.nack(requeue=True)
             return  # sem o return, cairia no ack abaixo e a mensagem se perderia
         logger.exception("Run %s: esgotou as %s tentativas.", run_id, MAX_ATTEMPTS)
-        await _mark_failed(run_id, "Falha no processamento. Tente reenviar o CSV.")
+        await _mark_failed_until_saved(
+            run_id, "Falha no processamento. Tente reenviar o CSV."
+        )
 
     await message.ack()
 
@@ -222,7 +256,7 @@ async def _consume(connection: aio_pika.abc.AbstractRobustConnection) -> None:
             try:
                 await handle_message(message)
             except Exception:
-                # Ex.: o banco caiu no meio do _mark_failed. Sem resposta, a mensagem ficaria
+                # Rede de segurança (ex.: falha no próprio ack). Sem resposta, a mensagem ficaria
                 # presa a este worker (e, com prefetch 1, ele pararia). Devolve à fila depois
                 # de uma espera; o worker segue vivo para as próximas.
                 logger.exception("Erro ao tratar mensagem; ela voltará à fila.")

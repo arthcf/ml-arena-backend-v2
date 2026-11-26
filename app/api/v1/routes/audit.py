@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.get("/", response_model=list[AuditLogRead])
+@router.get("", response_model=list[AuditLogRead])
 async def list_my_actions(
     limit: int = Query(20, ge=1, le=100),
     current_user: User = Depends(get_current_user),

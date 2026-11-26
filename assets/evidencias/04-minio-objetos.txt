@@ -1,16 +1,7 @@
 $ mcli ls --recursive local/ml-arena
-[2026-11-25 22:22:56 UTC] 2.7KiB STANDARD runs/2/measured_predicted.csv
-[2026-11-25 22:23:00 UTC]  31KiB STANDARD runs/2/plots/measured_predicted.png
-[2026-11-25 22:23:00 UTC]  24KiB STANDARD runs/2/plots/residuals.png
-[2026-11-25 22:23:13 UTC] 2.7KiB STANDARD runs/3/measured_predicted.csv
-[2026-11-25 22:23:26 UTC]  31KiB STANDARD runs/3/plots/measured_predicted.png
-[2026-11-25 22:23:27 UTC]  23KiB STANDARD runs/3/plots/residuals.png
-[2026-11-25 22:23:52 UTC] 2.7KiB STANDARD runs/5/measured_predicted.csv
-[2026-11-25 22:23:53 UTC]  31KiB STANDARD runs/5/plots/measured_predicted.png
-[2026-11-25 22:23:53 UTC]  23KiB STANDARD runs/5/plots/residuals.png
-[2026-11-25 22:24:47 UTC] 2.7KiB STANDARD runs/7/measured_predicted.csv
-[2026-11-25 22:24:50 UTC]  31KiB STANDARD runs/7/plots/measured_predicted.png
-[2026-11-25 22:24:50 UTC]  24KiB STANDARD runs/7/plots/residuals.png
-[2026-11-25 22:25:02 UTC] 2.7KiB STANDARD runs/8/measured_predicted.csv
-[2026-11-25 22:25:16 UTC]  31KiB STANDARD runs/8/plots/measured_predicted.png
-[2026-11-25 22:25:17 UTC]  23KiB STANDARD runs/8/plots/residuals.png
+[2026-11-26 00:33:54 UTC] 2.7KiB STANDARD runs/2/measured_predicted.csv
+[2026-11-26 00:33:58 UTC]  31KiB STANDARD runs/2/plots/measured_predicted.png
+[2026-11-26 00:33:58 UTC]  24KiB STANDARD runs/2/plots/residuals.png
+[2026-11-26 00:34:10 UTC] 2.7KiB STANDARD runs/3/measured_predicted.csv
+[2026-11-26 00:34:22 UTC]  31KiB STANDARD runs/3/plots/measured_predicted.png
+[2026-11-26 00:34:22 UTC]  23KiB STANDARD runs/3/plots/residuals.png

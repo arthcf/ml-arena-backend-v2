@@ -54,7 +54,8 @@ services:
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      # check_port_connectivity: só healthy com a porta AMQP aberta (o ping passa antes disso).
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -118,6 +119,8 @@ services:
     pull_policy: never
     container_name: ${API_CONTAINER_NAME:-ml-arena-api}
     env_file: [.env]
+    environment:
+      SECRET_KEY: ${SECRET_KEY:?defina SECRET_KEY no .env}
     command: fastapi run app/main.py --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000" # documentação interativa em /docs

@@ -79,7 +79,7 @@ def test_list_logs_consulta_so_o_usuario_do_mais_novo_para_o_mais_antigo(table):
 
 
 def test_rota_devolve_as_acoes_sem_o_sufixo_da_chave(table, client):
-    response = client.get("/api/v1/audit/?limit=5")
+    response = client.get("/api/v1/audit?limit=5")
     assert response.status_code == 200
     [log] = response.json()
     assert log["action"] == "PROCESS_RUN_DONE"
@@ -92,12 +92,12 @@ def test_rota_responde_503_se_o_dynamodb_falhar(monkeypatch, client):
         raise NoCredentialsError()
 
     monkeypatch.setattr(audit_repository, "list_logs", broken)
-    response = client.get("/api/v1/audit/")
+    response = client.get("/api/v1/audit")
     assert response.status_code == 503
 
 
 def test_rota_exige_login():
-    response = TestClient(app).get("/api/v1/audit/")
+    response = TestClient(app).get("/api/v1/audit")
     assert response.status_code == 401
 
 

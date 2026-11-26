@@ -1,12 +1,8 @@
-$ docker compose exec db psql -U $DB_USER -d $DB_NAME -c "select r.id, r.name, r.status, round(r.processing_duration_s::numeric,2) as dur_s, count(a.id) as artifacts from runs r left join artifacts a on a.run_id = r.id group by r.id order by r.id"
- id |    name    | status  | dur_s | artifacts 
-----+------------+---------+-------+-----------
-  2 | modelo B   | done    |  0.66 |         3
-  3 | modelo C   | done    |  0.89 |         3
-  4 | inválido   | created |       |         0
-  5 | minio fora | done    |  0.56 |         3
-  7 | modelo B   | done    |  0.49 |         3
-  8 | modelo C   | done    |  1.13 |         3
-  9 | inválido   | created |       |         0
-(7 rows)
+$ docker compose exec db psql -c "select ... from runs left join artifacts"
+ id |   name   | status  | dur_s | artifacts 
+----+----------+---------+-------+-----------
+  2 | modelo B | done    |  0.38 |         3
+  3 | modelo C | done    |  1.03 |         3
+  4 | inválido | created |       |         0
+(3 rows)
 

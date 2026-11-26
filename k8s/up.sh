@@ -22,6 +22,12 @@ kind load docker-image ml-arena-backend ml-arena-frontend --name "$CLUSTER"
 
 echo "== 3. Namespace, ConfigMap e Secret (só as chaves secretas do .env; nada vai para o git)"
 kubectl apply -f k8s/00-namespace.yaml -f k8s/01-configmap.yaml
+# O ConfigMap versionado traz padrões; o que estiver no .env (não secreto) tem prioridade.
+for key in DB_NAME MINIO_BUCKET AWS_REGION DYNAMODB_AUDIT_TABLE; do
+  value=$(grep -E "^$key=" .env | tail -1 | cut -d= -f2- || true)
+  [ -z "$value" ] || kubectl -n "$NS" patch configmap ml-arena-config --type merge \
+    -p "{\"data\": {\"$key\": \"$value\"}}" >/dev/null
+done
 secrets=$(mktemp)
 trap 'rm -f "$secrets"' EXIT
 grep -E "^($SECRET_KEYS)=" .env > "$secrets"

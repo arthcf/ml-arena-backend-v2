@@ -87,6 +87,8 @@ RUN_C=$(new_run "modelo C" "ridge" 1.6)
 [ "$(upload "$RUN_C" samples/modelo_a.csv)" = 201 ] || fail "upload com worker parado"
 sleep 2
 [ "$(curl -s "$API/runs/$RUN_C" -H "$AUTH" | json 'd["status"]')" != done ] || fail "processou sem worker?"
+# O contador do rabbitmqctl atualiza em intervalos de ~5 s: consulta até aparecer.
+for _ in $(seq 1 15); do [ "$(queue_ready)" = 1 ] && break; sleep 1; done
 [ "$(queue_ready)" = 1 ] || fail "esperava 1 mensagem Ready na fila"
 ok "upload 201, run não processado, 1 mensagem Ready"
 start_worker
@@ -103,7 +105,7 @@ ok "segundo CSV no mesmo run: 409"
 ok "sem token: 401"
 
 echo "6. Auditoria (DynamoDB): 200 com credenciais do Learner Lab, 503 sem"
-code=$(status_of "$API/audit/" -H "$AUTH")
+code=$(status_of "$API/audit" -H "$AUTH")
 case "$code" in 200 | 503) ok "GET /audit: $code" ;; *) fail "GET /audit: $code" ;; esac
 
 echo "7. Remover um run apaga os objetos do MinIO"

@@ -2,5 +2,6 @@ frontend -> api:8000  alcança
 frontend -> db:5432  bloqueado (redes separadas)
 frontend -> rabbitmq:5672  bloqueado (redes separadas)
 frontend -> minio:9000  bloqueado (redes separadas)
+frontend -> redis:6379  bloqueado (redes separadas)
 api -> db:5432  alcança
 worker -> rabbitmq:5672  alcança
