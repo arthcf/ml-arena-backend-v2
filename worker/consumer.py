@@ -19,6 +19,7 @@ import time
 
 import aio_pika
 from aio_pika.abc import AbstractIncomingMessage
+from sqlalchemy.exc import DBAPIError
 
 from app.core.cache import invalidate_user_cache
 from app.core.config import settings
@@ -47,6 +48,10 @@ RETRY_DELAY_S = 5
 # Erro de dado: o CSV não serve. Não adianta tentar de novo. Qualquer outro erro
 # (MinIO, banco, Redis ou inesperado) volta pra fila até MAX_ATTEMPTS.
 PERMANENT_ERRORS = (ValueError, KeyError)
+# Quanto tempo o worker insiste em gravar o failed com o banco fora. Fica bem abaixo do
+# consumer_timeout do RabbitMQ (30 min por padrão): passado esse prazo com uma mensagem sem
+# resposta, o broker fecha o canal e a mensagem volta para a fila por conta própria.
+MARK_FAILED_TIMEOUT_S = 10 * 60
 
 
 async def _ensure_plot_artifact(
@@ -170,22 +175,38 @@ async def _mark_failed(run_id: int, message: str) -> None:
         logger.exception("Run %s: não foi possível invalidar o cache.", run_id)
 
 
-async def _mark_failed_until_saved(run_id: int, message: str) -> None:
-    """Insiste até conseguir gravar o failed (ex.: o banco está fora).
+def _is_db_unavailable(exc: Exception) -> bool:
+    """O erro é do banco fora do ar (passa sozinho), e não de um bug ou de dado inválido?
 
-    Desistir aqui deixaria o run travado: a mensagem estouraria o limite de entregas, iria
-    para a DLQ e ninguém atualizaria o banco. Segurar a mensagem (sem ack) é seguro: se o
-    worker morrer durante a espera, ela volta para a fila. Com o banco fora, este worker não
-    conseguiria processar outra mensagem de qualquer forma.
+    Banco parado, nome que não resolve e timeout chegam do asyncpg como OSError; uma conexão
+    que cai no meio da consulta chega do SQLAlchemy com `connection_invalidated`.
     """
+    return isinstance(exc, OSError) or (
+        isinstance(exc, DBAPIError) and exc.connection_invalidated
+    )
+
+
+async def _mark_failed_until_saved(run_id: int, message: str) -> bool:
+    """Grava o failed, insistindo enquanto o banco estiver fora. Devolve se conseguiu.
+
+    Desistir na 1ª falha deixaria o run travado em processing, então com o banco fora vale
+    esperar (segurar a mensagem sem ack é seguro: se o worker morrer, ela volta para a fila).
+    Mas só nesse caso e só até MARK_FAILED_TIMEOUT_S: um erro que não passa sozinho (bug,
+    constraint) prenderia este worker para sempre, e com prefetch 1 ele não pegaria mais nada.
+    """
+    deadline = time.monotonic() + MARK_FAILED_TIMEOUT_S
     while True:
         try:
             await _mark_failed(run_id, message)
-            return
-        except Exception:
-            logger.exception(
-                "Run %s: não foi possível gravar o failed; nova tentativa em %ss.",
+            return True
+        except Exception as exc:
+            if not _is_db_unavailable(exc) or time.monotonic() >= deadline:
+                logger.exception("Run %s: não foi possível gravar o failed.", run_id)
+                return False
+            logger.warning(
+                "Run %s: banco indisponível ao gravar o failed (%r); nova tentativa em %ss.",
                 run_id,
+                exc,
                 RETRY_DELAY_S,
             )
             await asyncio.sleep(RETRY_DELAY_S)
@@ -218,7 +239,7 @@ async def handle_message(message: AbstractIncomingMessage) -> None:
     except PERMANENT_ERRORS as exc:
         # O detalhe técnico vai pro log; o usuário vê só a mensagem geral.
         logger.warning("Run %s: CSV não pôde ser processado: %r", run_id, exc)
-        await _mark_failed_until_saved(
+        saved = await _mark_failed_until_saved(
             run_id, "Processamento falhou: o CSV não pôde ser lido."
         )
     except Exception:
@@ -237,10 +258,18 @@ async def handle_message(message: AbstractIncomingMessage) -> None:
             await message.nack(requeue=True)
             return  # sem o return, cairia no ack abaixo e a mensagem se perderia
         logger.exception("Run %s: esgotou as %s tentativas.", run_id, MAX_ATTEMPTS)
-        await _mark_failed_until_saved(
+        saved = await _mark_failed_until_saved(
             run_id, "Falha no processamento. Tente reenviar o CSV."
         )
+    else:
+        saved = True
 
+    if not saved:
+        # O run ficou sem o failed. A mensagem vai para a DLQ, onde fica visível para
+        # inspeção e reprocessamento, em vez de girar na fila ou prender o worker.
+        logger.error("Run %s: mensagem enviada à DLQ sem gravar o failed.", run_id)
+        await message.reject(requeue=False)
+        return
     await message.ack()
 
 
